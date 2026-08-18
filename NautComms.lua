@@ -394,10 +394,18 @@ local function drainWideQueue()
 	trimStaleWideMessages()
 	if #wideQueue == 0 then return; end
 
-	if not wideChannelId then
+	-- re-resolve the channel id on every attempt rather than trusting the cached
+	-- value: channel ids are just slot numbers in the player's channel list, and
+	-- they get renumbered whenever that list changes (joining/leaving a channel,
+	-- or the user reordering channels). Sending on a stale id silently dumps our
+	-- encoded payload into whatever real channel now occupies that slot.
+	local currentId = GetChannelName(wideChannelName)
+	if not currentId or currentId == 0 then
+		wideChannelId = nil
 		NauticusClassic:JoinWideChannel()
 		return
 	end
+	wideChannelId = currentId
 
 	local CTL = _G.ChatThrottleLib
 	local text = wideQueue[1][1]
