@@ -353,7 +353,7 @@ function NauticusClassic:JoinWideChannel()
 	if wideJoinPending then return end
 	wideJoinPending = true
 
-	JoinChannelByName(wideChannelName, WIDE_CHANNEL_PW, nil, true)
+	JoinChannelByName(wideChannelName, WIDE_CHANNEL_PW, nil, false)
 
 	local remainingAttempts = 5
 	C_Timer.NewTicker(4, function(ticker)
@@ -372,7 +372,7 @@ function NauticusClassic:JoinWideChannel()
 			-- fall back to a differently-named channel in case the base name is unavailable
 			wideChannelName = wideChannelName.."b"
 			self:DebugMessage("wide channel join failed; trying "..wideChannelName)
-			JoinChannelByName(wideChannelName, WIDE_CHANNEL_PW, nil, true)
+			JoinChannelByName(wideChannelName, WIDE_CHANNEL_PW, nil, false)
 			-- give the fallback name its own attempt window before allowing a re-trigger
 			C_Timer.After(4, function() wideJoinPending = false end)
 		end
