@@ -14,8 +14,12 @@ in the `.toc` corresponds to Classic Era client patch 1.15.9. If the
 rather than assuming.
 
 Do not assume an API is available just because it shows up in a generic WoW
-API reference — check `/home/sam/dev/WowApiExplorer/wow_api.json` first.
-It's a structured dump of every `C_`-namespaced function/event/table
+API reference — check the ground-truth dump in the
+[WowApiExplorer](https://github.com/sam-k-taylor/WowApiExplorer) repo first,
+at `_classic_era_/<interface>.json` (currently
+`_classic_era_/11509.json` for `## Interface: 11509` — re-derive the
+filename the same way as the patch version above if `Interface` has moved
+on). It's a structured dump of every `C_`-namespaced function/event/table
 actually reported by **this Classic Era client's own** `/api` command (see
 that project's README for how it was generated) — i.e. it's Era-verified,
 not a retail guess, and can be trusted as ground truth for whether a `C_`
