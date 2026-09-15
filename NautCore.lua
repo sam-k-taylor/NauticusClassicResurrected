@@ -367,10 +367,12 @@ function NauticusClassic:OnEnable()
 	self:RegisterComm(self.DEFAULT_PREFIX)
 	-- the client auto-rejoins our hidden channel from a prior session on its own, often
 	-- grabbing a low slot (e.g. 1) before Blizzard's default channels (General/Trade/etc.)
-	-- load; drop that early auto-rejoin immediately, then delay our own rejoin so those
-	-- default channels claim their numeric IDs first and we land in a late slot instead
+	-- load; drop that early auto-rejoin immediately, then rejoin ourselves right away --
+	-- JoinWideChannel() no longer needs to wait for those default channels first, since it
+	-- deterministically shuffles us to the end of the channel list after joining regardless
+	-- of what order things joined in (see moveWideChannelToEnd in NautComms.lua)
 	self:LeaveWideChannel()
-	self:ScheduleTimer("JoinWideChannel", 10)
+	self:JoinWideChannel()
 
 	NauticusClassic.iconRenderTimer = self:ScheduleRepeatingTimer("DrawMapIcons", 1 / self.db.profile.iconFramerate, true, true)
 	self:ScheduleRepeatingTimer("Clock_OnUpdate", 1) -- every second (clock tick)

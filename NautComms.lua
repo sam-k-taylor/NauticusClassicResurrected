@@ -310,8 +310,8 @@ end
 -- suppress our channel's traffic from the chat UI entirely (join/leave/notice/text);
 -- also avoids Blizzard's HistoryKeeper building up permanent per-sender entries
 -- on a channel with many unique senders
-local function wideChatFilter(self, event, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, ...)
-	if arg9 and strupper(arg9) == strupper(wideChannelName) then
+local function wideChatFilter(self, event, text, playerName, languageName, channelName, playerName2, specialFlags, zoneChannelID, channelIndex, channelBaseName, ...)
+	if channelBaseName and strupper(channelBaseName) == strupper(wideChannelName) then
 		return true
 	end
 	return false
@@ -330,13 +330,71 @@ local wideJoinPending = false
 
 -- the client auto-rejoins previously-joined custom channels on login on its own,
 -- independent of any addon code, and does so before OnEnable ever runs — so by the
--- time our delayed JoinWideChannel() timer fires, we may already be sitting in a
--- low slot (e.g. 1) that we grabbed before Blizzard's default channels (General/
--- Trade/etc.) loaded. Call this once, immediately, at the start of OnEnable to drop
--- that early auto-rejoin and free the slot, so the later delayed join actually lands
--- in a late slot instead of just adopting whatever number we already had.
+-- time our own JoinWideChannel() runs, we may already be sitting in a low slot
+-- (e.g. 1) that we grabbed before Blizzard's default channels (General/Trade/etc.)
+-- loaded. Call this once, immediately, at the start of OnEnable to drop that early
+-- auto-rejoin and free the slot before we rejoin ourselves further down.
 function NauticusClassic:LeaveWideChannel()
 	LeaveChannelByName(wideChannelName)
+end
+
+-- Waiting for Blizzard's default channels to "finish loading" before joining (an
+-- earlier version of this code tried both a fixed delay and a couple of polling
+-- heuristics) is inherently a guessing game against server timing, and kept losing
+-- the race on some logins (e.g. a freshly-created character) -- landing us in slot
+-- 1 anyway. Instead, don't bother guessing: join whenever, then use
+-- C_ChatInfo.SwapChatChannelsByChannelIndex to walk our channel past whatever
+-- currently occupies the highest slot, landing us at the end deterministically
+-- regardless of join order. wideReshuffleWatcher (below) re-runs this any time
+-- another channel joins later in the session (e.g. Trade on entering a city),
+-- so we stay at the end even then.
+local function moveWideChannelToEnd()
+	local ourId = GetChannelName(wideChannelName)
+	if not ourId or ourId == 0 then return end
+
+	local channels = { GetChannelList() } -- flat id/name/disabled triples
+	local highestId = ourId
+	for i = 1, #channels, 3 do
+		local channelId = channels[i]
+		if channelId and channelId > highestId then
+			highestId = channelId
+		end
+	end
+
+	local startId = ourId
+	while ourId < highestId do
+		C_ChatInfo.SwapChatChannelsByChannelIndex(ourId, ourId + 1)
+		ourId = ourId + 1
+	end
+
+	wideChannelId = GetChannelName(wideChannelName)
+	if startId ~= ourId then
+		NauticusClassic:DebugMessage(format("wide channel shuffled %d -> %d (highest seen: %d)", startId, wideChannelId or -1, highestId))
+	end
+end
+
+-- belt-and-suspenders alongside wideReshuffleWatcher below: on a freshly-created
+-- character, Blizzard's default channels (General/etc.) may not generate an
+-- observable CHAT_MSG_CHANNEL_NOTICE YOU_JOINED the watcher can react to (their
+-- one-time initial provisioning for a brand new character appears to differ from
+-- a normal mid-session channel join), which left the WIDE channel stuck in an
+-- early slot with nothing to trigger a re-shuffle. Re-run the shuffle on a plain
+-- timer for a while after our own join instead of trusting only the event.
+local WIDE_RESHUFFLE_POLL_INTERVAL = 3 -- seconds
+local WIDE_RESHUFFLE_POLL_ATTEMPTS = 10 -- ~30s total
+local widePollStarted = false
+local function startWideReshufflePoll()
+	if widePollStarted then return end
+	widePollStarted = true
+	local attempts = 0
+	local ticker
+	ticker = C_Timer.NewTicker(WIDE_RESHUFFLE_POLL_INTERVAL, function()
+		attempts = attempts + 1
+		moveWideChannelToEnd()
+		if attempts >= WIDE_RESHUFFLE_POLL_ATTEMPTS then
+			ticker:Cancel()
+		end
+	end)
 end
 
 -- drainWideQueue calls JoinWideChannel() on every hardware event while unjoined
@@ -346,6 +404,8 @@ function NauticusClassic:JoinWideChannel()
 	local id = GetChannelName(wideChannelName)
 	if id and id > 0 then
 		wideChannelId = id
+		moveWideChannelToEnd()
+		startWideReshufflePoll()
 		hideWideChannelFromChatFrames()
 		return
 	end
@@ -360,6 +420,8 @@ function NauticusClassic:JoinWideChannel()
 		local channelNum = GetChannelName(wideChannelName)
 		if channelNum and channelNum > 0 then
 			wideChannelId = channelNum
+			moveWideChannelToEnd()
+			startWideReshufflePoll()
 			hideWideChannelFromChatFrames()
 			wideJoinPending = false
 			ticker:Cancel()
@@ -378,6 +440,19 @@ function NauticusClassic:JoinWideChannel()
 		end
 	end)
 end
+
+-- Blizzard channels aren't only joined at login -- Trade only becomes available on
+-- entering a city, LookingForGroup on grouping, etc. Whenever any channel other than
+-- ours joins later in the session, re-run the shuffle so we don't drift back to
+-- occupying a slot number a player would reasonably expect to be a real channel.
+local wideReshuffleWatcher = CreateFrame("Frame")
+wideReshuffleWatcher:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
+wideReshuffleWatcher:SetScript("OnEvent", function(_, _, noticeType, _, _, _, _, _, _, _, channelBaseName)
+	if noticeType == "YOU_JOINED" and (not channelBaseName or strupper(channelBaseName) ~= strupper(wideChannelName)) then
+		NauticusClassic:DebugMessage("wide reshuffle watcher: YOU_JOINED "..tostring(channelBaseName))
+		moveWideChannelToEnd()
+	end
+end)
 
 function NauticusClassic:EnqueueWideMessage(msg)
 	table.insert(wideQueue, { WIDE_TAG..msg, GetServerTime() })
