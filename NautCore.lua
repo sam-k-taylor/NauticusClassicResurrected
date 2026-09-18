@@ -24,6 +24,60 @@ local HBD = LibStub("HereBeDragons-2.0")
 local Pins = LibStub("HereBeDragons-Pins-2.0")
 local ldbicon = LibStub("LibDBIcon-1.0")
 
+-- Fixed replacement for HBD:GetWorldCoordinatesFromAzerothWorldMap /
+-- GetAzerothWorldMapCoordinatesFromWorld, calibrated to the same constants
+-- HereBeDragons itself used for WOW_PROJECT_CLASSIC (see the WoWClassic
+-- branch of fixupZones() in HereBeDragons-2.0.lua) at the time the
+-- coordsType<0 routes in data.lua were recorded via the world map.
+--
+-- HBD re-derives its own worldMapData rect at load time from WOW_PROJECT_ID,
+-- and picks a *different* (retail-scale) rect when it doesn't recognize the
+-- client's project ID as one of its known Classic flavours. Confirmed via
+-- /nautcoords on "WoW: Forever" (Interface 16001): that client reports
+-- WOW_PROJECT_ID = 1 (WOW_PROJECT_MAINLINE), which none of HBD's
+-- WoWClassic/WoWBC/WoWWrath/WoWCata/WoWMists checks match, so HBD silently
+-- uses its retail rect ({76153.14, 50748.62, 65008.24, 23827.51} for
+-- instance 0 vs Classic's {44688.53, 29795.11, 32601.04, 9894.93}) — a ~13
+-- point swing in the resulting 0-1 fraction for the same physical spot,
+-- which is why every coordsType<0 trigger/dock proximity check (20-yard
+-- radius) missed entirely, and (below) why DrawMapIcons_Unsafe placed the
+-- minimap icon in the wrong spot and suppressed the world map icon outright
+-- (its in-viewport bounds check never landed in 0-1). The underlying
+-- per-continent raw world coordinates HBD:GetPlayerWorldPosition returns
+-- are NOT affected by this (verified against instance 0's known Classic-era
+-- range) — only the fractional AzerothWorldMap encoding used to
+-- store/replay routes is, so pinning these constants here (independent of
+-- whatever HBD decides at runtime) fixes it without needing to re-record
+-- any route data. Declared up here (not next to its first use) so it's in
+-- scope for both DrawMapIcons_Unsafe (above CheckTriggers_OnUpdate_Unsafe in
+-- this file) and the trigger/arrival checks below it.
+local CLASSIC_AZEROTH_WORLDMAP_RECT = {
+	[0] = { 44688.53, 29795.11, 32601.04,  9894.93 }, -- Eastern Kingdoms
+	[1] = { 44878.66, 29916.10,  8723.96, 14824.53 }, -- Kalimdor
+}
+
+local function WorldFromClassicAzerothMap(x, y, instance)
+	local data = CLASSIC_AZEROTH_WORLDMAP_RECT[instance]
+	if not data or not x or not y then return nil, nil end
+	local width, height, left, top = data[1], data[2], data[3], data[4]
+	return left - width * x, top - height * y
+end
+
+local function ClassicAzerothMapFromWorld(x, y, instance)
+	local data = CLASSIC_AZEROTH_WORLDMAP_RECT[instance]
+	if not data or not x or not y then return nil, nil end
+	local width, height, left, top = data[1], data[2], data[3], data[4]
+	return (left - x) / width, (top - y) / height
+end
+
+-- Interface number of the client actually running us (not the .toc's declared
+-- list of supported ones) — see CLAUDE.md "A fix made for Forever must not
+-- change Era's behavior". Re-derive FOREVER_INTERFACE the same way as the
+-- .toc's Interface line if it moves on; >= (not ==) so a later Forever patch
+-- doesn't fall back to being treated as Era.
+local FOREVER_INTERFACE = 16001
+local IS_FOREVER = select(4, GetBuildInfo()) >= FOREVER_INTERFACE
+
 -- read our own version from the .toc so it can never drift out of sync with
 -- what's actually shipped; versionNum packs "MAJOR.MINOR.PATCH" into digits
 -- (e.g. 1.4.1 -> 141) for the numeric comparisons in NautComms.lua, so each
@@ -225,6 +279,7 @@ local _options = {
 		name = L["Arrival sound"],
 		desc = L["Play a sound when a tracked transport arrives at a platform you're standing near."],
 		order = 320,
+		hidden = function() return IS_FOREVER end, -- Forever's client already plays its own docking sound
 		get = function()
 			return NauticusClassic.db.profile.arrivalDing
 		end,
@@ -487,7 +542,7 @@ function NauticusClassic:DrawMapIcons_Unsafe(renderWorldMapIcons, renderMinimapI
 							wzone = 0
 							wcont = 1415
 						end
-						xw, yw = HBD:GetWorldCoordinatesFromAzerothWorldMap(x, y, wzone)
+						xw, yw = WorldFromClassicAzerothMap(x, y, wzone)
 						if wzone == instanceID then
 							xm, ym = xw, yw
 						else
@@ -657,7 +712,7 @@ function NauticusClassic:CheckTriggers_OnUpdate_Unsafe()
 	old_x, old_y = x, y
 	old_ax, old_ay = ax, ay
 	x, y, instanceID = HBD:GetPlayerWorldPosition()
-	ax, ay = HBD:GetAzerothWorldMapCoordinatesFromWorld(x, y, instanceID)
+	ax, ay = ClassicAzerothMapFromWorld(x, y, instanceID)
 
 	if not x or not old_x or not y or not old_y then return; end
 
@@ -707,8 +762,8 @@ function NauticusClassic:CheckTriggers_OnUpdate_Unsafe()
 			for _, index in pairs(triggers[transit]) do
 				post = 0 > index; if post then index = -index; end
 				if self.coordsType[transit] < 0 then
-					txp, typ = HBD:GetWorldCoordinatesFromAzerothWorldMap(transitData[transit].x[index-1], transitData[transit].y[index-1], instanceID)
-					tx, ty = HBD:GetWorldCoordinatesFromAzerothWorldMap(transitData[transit].x[index], transitData[transit].y[index], instanceID)
+					txp, typ = WorldFromClassicAzerothMap(transitData[transit].x[index-1], transitData[transit].y[index-1], instanceID)
+					tx, ty = WorldFromClassicAzerothMap(transitData[transit].x[index], transitData[transit].y[index], instanceID)
 				else
 					txp, typ = transitData[transit].x[index-1], transitData[transit].y[index-1]
 					tx, ty = transitData[transit].x[index], transitData[transit].y[index]
@@ -745,7 +800,7 @@ function NauticusClassic:CheckTriggers_OnUpdate_Unsafe()
 			if transit ~= self.activeTransit then
 				for _, data in pairs(self.platforms[transit]) do
 					if self.coordsType[transit] < 0 then
-						tx, ty = HBD:GetWorldCoordinatesFromAzerothWorldMap(transitData[transit].x[data.index], transitData[transit].y[data.index], instanceID)
+						tx, ty = WorldFromClassicAzerothMap(transitData[transit].x[data.index], transitData[transit].y[data.index], instanceID)
 					else
 						tx, ty = transitData[transit].x[data.index], transitData[transit].y[data.index]
 					end
@@ -774,6 +829,10 @@ end
 -- platform the player is standing near; edge-triggered on dockedAtPlatform so it
 -- fires once per arrival rather than every tick while docked
 function NauticusClassic:CheckArrivals_OnUpdate_Unsafe()
+	-- Forever's own client already plays a docking sound; ignore whatever
+	-- arrivalDing is set to (even a stale true from before switching clients)
+	-- rather than double up on it. Era has no such built-in sound.
+	if IS_FOREVER then return; end
 	if not self.db.profile.arrivalDing then return; end
 	if not self.currentZoneTransports or self.currentZoneTransports.virtual then return; end
 
@@ -796,7 +855,7 @@ function NauticusClassic:CheckArrivals_OnUpdate_Unsafe()
 			if dockedIndex and dockedIndex ~= dockedAtPlatform[transit] then
 				local tx, ty
 				if self.coordsType[transit] < 0 then
-					tx, ty = HBD:GetWorldCoordinatesFromAzerothWorldMap(transitData[transit].x[dockedIndex], transitData[transit].y[dockedIndex], instanceID)
+					tx, ty = WorldFromClassicAzerothMap(transitData[transit].x[dockedIndex], transitData[transit].y[dockedIndex], instanceID)
 				else
 					tx, ty = transitData[transit].x[dockedIndex], transitData[transit].y[dockedIndex]
 				end
@@ -822,8 +881,8 @@ function NauticusClassic:SetKnownTime(instanceID, transit, index, x, y, set)
 	local transitData = transitData[transit]
 	local ix, iy, ix2, iy2
 	if self.coordsType[transit] < 0 then
-		ix, iy = HBD:GetWorldCoordinatesFromAzerothWorldMap(transitData.x[index-1], transitData.y[index-1], instanceID)
-		ix2, iy2 = HBD:GetWorldCoordinatesFromAzerothWorldMap(transitData.x[index], transitData.y[index], instanceID)
+		ix, iy = WorldFromClassicAzerothMap(transitData.x[index-1], transitData.y[index-1], instanceID)
+		ix2, iy2 = WorldFromClassicAzerothMap(transitData.x[index], transitData.y[index], instanceID)
 	else
 		ix, iy = transitData.x[index-1], transitData.y[index-1]
 		ix2, iy2 = transitData.x[index], transitData.y[index]
@@ -1206,6 +1265,48 @@ function NauticusClassic:DebugMessage(msg)
 		--ChatFrame3:AddMessage(format("[Naut] ["..YELLOW.."%0.3f|r]: %s", now-lastDebug, msg))
 		lastDebug = now
 	end
+end
+
+-- Diagnostic that confirmed, then verifies, the "WoW: Forever" (Interface
+-- 16001) transit-detection breakage: on that client WOW_PROJECT_ID = 1
+-- (WOW_PROJECT_MAINLINE), which none of HereBeDragons' WoWClassic/WoWBC/
+-- WoWWrath/WoWCata/WoWMists checks match (see fixupZones() in
+-- HereBeDragons-2.0.lua) — an old-style global, not a C_ API, so it isn't
+-- in the WowApiExplorer dumps and this had to be confirmed live in-game
+-- instead. HBD falls into its retail/mainline branch as a result and uses a
+-- much larger Azeroth-world-map scale ({76153.14,50748.62,...} vs Classic's
+-- {44688.53,29795.11,...}), so every route recorded via that fraction
+-- encoding (coordsType<0 in data.lua) landed nowhere near where the client
+-- now says it is. WorldFromClassicAzerothMap/ClassicAzerothMapFromWorld
+-- above pin the Classic constants directly, independent of HBD's runtime
+-- guess, which is the actual fix; this command's "HBD's live" line should
+-- now visibly disagree with "fixed classic-calibrated", confirming why the
+-- old code broke and that the new path is being used instead. Not gated
+-- behind self.debug: meant to be run ad-hoc and the output pasted back,
+-- like /nautwide.
+SLASH_NAUTCOORDS1 = "/nautcoords"
+SlashCmdList["NAUTCOORDS"] = function()
+	local x, y, instanceID = HBD:GetPlayerWorldPosition()
+	local hbdAx, hbdAy
+	if x then hbdAx, hbdAy = HBD:GetAzerothWorldMapCoordinatesFromWorld(x, y, instanceID) end
+	local fixedAx, fixedAy = ClassicAzerothMapFromWorld(x, y, instanceID)
+	local uiMapID = C_Map.GetBestMapForUnit("player")
+	local mapInfo = uiMapID and C_Map.GetMapInfo(uiMapID)
+	local wm0, wm1 = HBD.worldMapData[0], HBD.worldMapData[1]
+
+	local function fmtRect(wm)
+		return wm and format("{%.2f, %.2f, %.2f, %.2f}", wm[1], wm[2], wm[3], wm[4]) or "nil"
+	end
+
+	print("|cff33ff99[NautCoords]|r WOW_PROJECT_ID = "..tostring(WOW_PROJECT_ID))
+	print(format("  player world pos: x=%s y=%s instanceID=%s", tostring(x), tostring(y), tostring(instanceID)))
+	print(format("  HBD's live azeroth worldmap pos: ax=%s ay=%s", tostring(hbdAx), tostring(hbdAy)))
+	print(format("  fixed classic-calibrated pos (what transitData is now compared against): ax=%s ay=%s", tostring(fixedAx), tostring(fixedAy)))
+	print(format("  uiMapID=%s (%s)", tostring(uiMapID), mapInfo and mapInfo.name or "?"))
+	print("  HBD.worldMapData[0] = "..fmtRect(wm0))
+	print("  HBD.worldMapData[1] = "..fmtRect(wm1))
+	print("  reference: Classic Era = {44688.53, 29795.11, 32601.04, 9894.93} / {44878.66, 29916.10, 8723.96, 14824.53}")
+	print("             HBD retail-branch fallback = {76153.14, 50748.62, 65008.24, 23827.51} / {77621.12, 51854.98, 12444.4, 28030.61}")
 end
 
 function NauticusClassic:sameSign(num1, num2)

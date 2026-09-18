@@ -280,8 +280,8 @@ function NauticusClassic:MapIcon_OnEnter(frame)
 
 	for id, data in pairs(transports) do
 		if transit ~= id and
-			((data.worldmap_icon:IsVisible() and MouseIsOver(data.worldmap_icon)) or
-			(data.minimap_icon:IsVisible() and MouseIsOver(data.minimap_icon)))
+			((data.worldmap_icon:IsVisible() and data.worldmap_icon:IsMouseOver()) or
+			(data.minimap_icon:IsVisible() and data.minimap_icon:IsMouseOver()))
 		then
 			tablet:AddLine("•") -- ascii 149
 				:Color(0.5, 0.5, 0, 1)
