@@ -10,6 +10,7 @@ L["icons"] = true
 L["minishow"] = true
 L["worldshow"] = true
 L["minisize"] = true
+L["minisizeforever"] = true
 L["worldsize"] = true
 L["framerate"] = true
 L["faction"] = true
@@ -30,6 +31,10 @@ L["Show on World Map"] = true
 L["Toggle display of icons on the World Map."] = true
 L["Mini-Map icon size"] = true
 L["Change the size of the Mini-Map icons."] = true
+L["Change the size of the Mini-Map icons. Small is the default/current size, Large is double that, Medium is halfway between."] = true -- Forever-only preset version of the above, see iconminisizeforever in NautCore.lua
+L["Small"] = true
+L["Medium"] = true
+L["Large"] = true
 L["World Map icon size"] = true
 L["Change the size of the World Map icons."] = true
 L["Icon framerate"] = true
@@ -80,6 +85,8 @@ L["The Moonspray"] = true
 L["Feathermoon Ferry"] = true
 L["Deeprun Tram North"] = true
 L["Deeprun Tram South"] = true
+L["Unnamed Vessel"] = true -- placeholder until the real name of the Stormwind Harbor<->Auberdine boat (and [13], the Alliance Zephras Isle<->Dalaran City boat) is known
+L["The Skycutter"] = true -- TODO: placeholder -- "Skycutter" is the vessel TYPE per the dockmaster's announcement, not a confirmed proper name; see data.lua's [12] vessel_name comment
 
 -- zones
 L["Orgrimmar"] = true
@@ -96,18 +103,32 @@ L["Feralas"] = true
 L["Stormwind City"] = true
 L["Ironforge"] = true
 L["Deeprun Tram"] = true
+L["Hillsbrad Foothills"] = true -- Forever-only 3rd stop on [5]'s route, see data.lua's transportOverrides_forever
+L["Zephras Isle"] = true -- Forever-only new starting zone (Horde route [12], also the Alliance side of [13])
+L["Mulgore"] = true
+L["Dalaran City"] = true -- [13]'s Alliance route destination, confirmed via screenshot -- a relocated/renamed Dalaran in Alterac Mountains on Forever, not the classic Alterac Valley zone or retail's Dalaran
+L["Alterac Mountains"] = true
+L["Riverglades"] = true -- Forever-only new zone, [14]'s route -- not yet confirmed whether it has Azeroth-composite-map placement or needs :rawp treatment like Zephras Isle
+L["Tanaris"] = true -- real classic Kalimdor zone, [14]'s route destination
 
 -- subzones
 L["Grom'gol"] = true
 L["Booty Bay"] = true
 L["Ratchet"] = true
 L["Menethil Harbor"] = true
+L["Stormwind Harbor"] = true
 L["Auberdine"] = true
 L["Theramore"] = true
 L["Rut'Theran Village"] = true
 L["Sardor Isle"] = true
 L["Feathermoon"] = true
 L["Forgotten Coast"] = true
+L["Southshore"] = true -- Forever-only 3rd stop on [5]'s route (Hillsbrad Foothills)
+L["Windshapers Dock"] = true -- TODO: dock name partially cut off in the confirming screenshot ("Windshapers Dock..."), confirm full name in-game
+L["Skywatch Plateau"] = true -- TODO: best-guess spelling of the Mulgore-side dock, not yet confirmed in-game
+L["High Order Dock"] = true -- TODO: guessed from the "High Order Dockmaster" NPC name (screenshot 2026-09-21) -- [13]'s Zephras Isle (Alliance) dock, no confirmed proper name yet
+L["Powderfuse Port"] = true -- [14]'s Riverglades-side dock
+L["Steamwheedle Port"] = true -- [14]'s Tanaris-side dock
 
 -- abbreviations
 L["Org"] = true -- Orgrimmar
@@ -123,6 +144,12 @@ L["FMS"] = true -- Feathermoon
 L["Fer"] = true -- Feralas
 L["SW"] = true -- Stormwind City
 L["IF"] = true -- Ironforge
+L["SS"] = true -- Southshore
+L["ZI"] = true -- Zephras Isle
+L["Mul"] = true -- Mulgore
+L["Dal"] = true -- Dalaran City
+L["Riv"] = true -- Riverglades
+L["Tan"] = true -- Tanaris
 
 -- channels
 L["Say"] = true

@@ -42,3 +42,14 @@ luac.out
 .idea
 
 lua-error.txt
+debug.txt
+NauticusClassicResurrected.lua
+Screenshot *.png
+Recording *.mp4
+data.txt
+forever-bug-report.txt
+
+# Local-only dev debugging history -- full blow-by-blow trail behind the
+# shipped code's short "why" comments. Deliberately never committed (see
+# its own header) -- keep this ignored even if the file is later renamed.
+DEVHISTORY.md
