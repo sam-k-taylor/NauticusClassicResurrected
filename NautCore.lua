@@ -215,7 +215,7 @@ local defaults = {
 		arrivalDing = true,
 		miniIconSize = 1,
 		worldIconSize = 1.25,
-		miniIconSizeForeverPreset = "small", -- Forever-only, see iconminisizeforever below; deliberately separate from miniIconSize since profiles are account-wide/shared between clients and this must not affect Era's slider value
+		miniIconSizeForeverPreset = "small", -- Forever-only preset, see iconminisizeforever below -- kept separate from miniIconSize since it's a different kind of value (discrete preset vs. continuous slider), not shared storage
 		iconFramerate = 30,
 		showMiniIcons = true,
 		showWorldIcons = true,
@@ -296,12 +296,12 @@ local _options = {
 	},
 	-- Forever-only preset version of the above -- a separate profile field
 	-- (miniIconSizeForeverPreset) rather than reusing miniIconSize, since
-	-- profiles are account-wide/shared between clients (see NautCore.lua's
-	-- "the addon is account-wide" comment elsewhere) and writing through the
-	-- same field here would silently change Era's icon size too. Small
-	-- (1x) matches the slider's existing default/current size, Large (2x)
-	-- is double that, Medium (1.5x) is halfway between -- see
-	-- MINI_ICON_SIZE_FOREVER_PRESETS near ICON_DEFAULT_SIZE.
+	-- Forever uses discrete small/medium/large presets while Era uses a
+	-- continuous slider -- different value shapes need different storage
+	-- regardless of profile scope. Small (1x) matches the slider's
+	-- existing default/current size, Large (2x) is double that, Medium
+	-- (1.5x) is halfway between -- see MINI_ICON_SIZE_FOREVER_PRESETS near
+	-- ICON_DEFAULT_SIZE.
 	iconminisizeforever = {
 		type = 'select',
 		name = L["Mini-Map icon size"],

@@ -8,7 +8,16 @@ Look up arrival & departure schedules for any transport and know exactly when yo
 
 NauticusClassicResurrected now runs on **WoW: Forever** as well as **WoW Classic Era** — same addon, same install, both clients supported from one download.
 
-**Known issue:** on Forever, every transport tracks correctly *except* the Menethil Harbor ↔ Auberdine boat (Wetlands ↔ Darkshore, "The Bravery") — Forever added a new stop at Southshore partway along that route which the addon doesn't yet account for, so schedules for that one boat won't show. A fix is coming, alongside support for the new transports Forever has added that Era never had. Everything else — all other boats, both zeppelins, and the Deeprun Tram — works on Forever today.
+Every boat, zeppelin, and the Deeprun Tram tracks correctly on Forever, including the Menethil Harbor ↔ Auberdine route, which Forever extended with a new middle stop at Southshore (Wetlands ↔ Hillsbrad Foothills ↔ Darkshore) — now fully supported as a 3-stop route.
+
+**New transports, Forever-exclusive** (these don't exist on Classic Era, since the zones/routes themselves are new):
+
+* **Stormwind Harbor ↔ Auberdine** (Alliance boat)
+* **Zephras Isle ↔ Mulgore** (Horde zeppelin)
+* **Zephras Isle ↔ Dalaran City** (Alliance zeppelin)
+* **Riverglades ↔ Tanaris** (Neutral boat, Powderfuse Port ↔ Steamwheedle Port)
+
+Forever support (including these four new routes) is recent — if you spot a schedule that looks off, a map icon in the wrong place, or anything else that doesn't seem right, please let us know via a CurseForge comment or a GitHub issue so it can get fixed quickly.
 
 ## Main Features
 
@@ -34,4 +43,4 @@ NauticusClassicResurrected now runs on **WoW: Forever** as well as **WoW Classic
 ## Compatibility
 
 * ✅ WoW Classic Era
-* ✅ WoW: Forever *(new — see known issue above)*
+* ✅ WoW: Forever *(new — see above for the new Forever-exclusive routes)*
