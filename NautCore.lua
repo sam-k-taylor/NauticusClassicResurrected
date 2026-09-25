@@ -530,6 +530,20 @@ local function GetCurrentMapOrInstanceID()
 	return id
 end
 
+-- Nothing this addon tracks exists inside a dungeon/raid, and Forever marks
+-- chat args "secret" in there (both confirmed Lua errors so far came from
+-- instances), so sending, the dock-announcement listener and trigger checks
+-- all stand down while this is true. Receiving syncs deliberately carries on
+-- (secret-valued messages are skipped individually in NautComms.lua), so
+-- timings are still fresh on the way back out. Checked live rather than cached so it can't go stale
+-- across a loading screen. Deliberately only "party"/"raid" rather than
+-- IsInInstance(), so anything else instanced (e.g. the Deeprun Tram, which
+-- this addon does track) isn't caught up in it.
+function NauticusClassic:InDungeon()
+	local _, instanceType = GetInstanceInfo()
+	return instanceType == "party" or instanceType == "raid"
+end
+
 function NauticusClassic:GetBroadcastChannel()
 	local channel = NauticusClassic.db.profile.broadcastChannel
 	if (channel == "GUILD" and not IsInGuild()) or (channel == "PARTY" and not IsInGroup()) or (channel == "RAID" and not IsInRaid()) then
@@ -1001,6 +1015,7 @@ end
 
 -- see Clock_OnUpdate: guards against one bad tick permanently killing this repeating timer
 function NauticusClassic:CheckTriggers_OnUpdate()
+	if self:InDungeon() then return; end
 	local ok, err = pcall(self.CheckTriggers_OnUpdate_Unsafe, self)
 	if not ok then
 		self:DebugMessage("CheckTriggers_OnUpdate error: "..tostring(err))
@@ -1048,6 +1063,7 @@ end
 
 -- see Clock_OnUpdate: guards against one bad tick permanently killing this repeating timer
 function NauticusClassic:CheckArrivals_OnUpdate()
+	if self:InDungeon() then return; end
 	local ok, err = pcall(self.CheckArrivals_OnUpdate_Unsafe, self)
 	if not ok then
 		self:DebugMessage("CheckArrivals_OnUpdate error: "..tostring(err))
@@ -1388,8 +1404,13 @@ function NauticusClassic:PLAYER_ENTERING_WORLD()
 	-- zeppelin/boat continent crossing is itself a zone transition, and the
 	-- hidden WIDE channel can silently drop membership across one, so it
 	-- needs to be re-verified/rejoined every time, not just once at login.
+	-- The rejoin still happens inside a dungeon so syncs keep arriving; only
+	-- our own broadcast is skipped there, and the loading screen on the way
+	-- back out fires this again, which re-syncs then.
 	self:JoinWideChannel()
-	self:UpdateChannel(10)
+	if not self:InDungeon() then
+		self:UpdateChannel(10)
+	end
 
 	self.currentZoneId = GetCurrentMapOrInstanceID()
 	if self.currentZoneId then
@@ -1722,6 +1743,7 @@ function NauticusClassic:ChatArrivalWatcher_OnMsg_Unsafe(event, msg, sender)
 end
 
 function NauticusClassic:ChatArrivalWatcher_OnMsg(event, msg, sender)
+	if self:InDungeon() then return; end
 	local ok, err = pcall(self.ChatArrivalWatcher_OnMsg_Unsafe, self, event, msg, sender)
 	if not ok then
 		self:DebugMessage("ChatArrivalWatcher_OnMsg error: "..tostring(err))

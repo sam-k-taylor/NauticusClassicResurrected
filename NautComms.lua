@@ -13,6 +13,16 @@ local CMD_KNOWN = "KWN4"
 local NauticusClassic = NauticusClassic
 local L = LibStub("AceLocale-3.0"):GetLocale("NauticusClassic")
 
+-- Forever marks some CHAT_MSG_* arguments as "secret" values (confirmed live:
+-- CHAT_MSG_CHANNEL text/sender), and any addon-side string op on one throws
+-- ("attempt to perform string conversion on a secret string value"). They
+-- can't be read at all, so the only option is to skip them. issecretvalue is
+-- in both clients' API dumps, but nil-guarded anyway; on Era nothing is ever
+-- secret here, so this is a no-op there.
+local function isSecret(v)
+	return issecretvalue ~= nil and issecretvalue(v)
+end
+
 local requests = {
 	["ALL"] = nil,
 	["RAID"] = nil,
@@ -198,7 +208,7 @@ function NauticusClassic:RequestTransport(t, distribution)
 end
 
 function NauticusClassic:SendMessage(msg, distribution)
-	if not self.comm_disable then
+	if not self.comm_disable and not self:InDungeon() then
 		self:DebugMessage("sending msg dist: "..distribution.." ; length: "..strlen(msg))
 		if distribution == "ALL" then
 			if IsInRaid() then
@@ -311,7 +321,7 @@ end
 -- also avoids Blizzard's HistoryKeeper building up permanent per-sender entries
 -- on a channel with many unique senders
 local function wideChatFilter(self, event, text, playerName, languageName, channelName, playerName2, specialFlags, zoneChannelID, channelIndex, channelBaseName, ...)
-	if channelBaseName and strupper(channelBaseName) == strupper(wideChannelName) then
+	if channelBaseName and not isSecret(channelBaseName) and strupper(channelBaseName) == strupper(wideChannelName) then
 		return true
 	end
 	return false
@@ -448,6 +458,7 @@ end
 local wideReshuffleWatcher = CreateFrame("Frame")
 wideReshuffleWatcher:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
 wideReshuffleWatcher:SetScript("OnEvent", function(_, _, noticeType, _, _, _, _, _, _, _, channelBaseName)
+	if isSecret(noticeType) or isSecret(channelBaseName) then return end
 	if noticeType == "YOU_JOINED" and (not channelBaseName or strupper(channelBaseName) ~= strupper(wideChannelName)) then
 		NauticusClassic:DebugMessage("wide reshuffle watcher: YOU_JOINED "..tostring(channelBaseName))
 		moveWideChannelToEnd()
@@ -467,6 +478,7 @@ end
 
 local function drainWideQueue()
 	trimStaleWideMessages()
+	if NauticusClassic:InDungeon() then return end -- anything queued just ages out
 	if #wideQueue == 0 then return; end
 
 	-- re-resolve the channel id on every attempt rather than trusting the cached
@@ -510,6 +522,7 @@ wideInputFrame:SetPropagateKeyboardInput(true)
 local wideChannelWatcher = CreateFrame("Frame")
 wideChannelWatcher:RegisterEvent("CHAT_MSG_CHANNEL")
 wideChannelWatcher:SetScript("OnEvent", function(_, _, text, sender)
+	if isSecret(text) or isSecret(sender) then return end
 	if strsub(text, 1, strlen(WIDE_TAG)) ~= WIDE_TAG then return end -- not ours / different protocol version
 
 	local senderName = strsplit("-", sender) -- strip realm suffix
