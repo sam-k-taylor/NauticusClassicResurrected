@@ -93,6 +93,9 @@ local FULL_MAP = SAFE_MAP..
 	"\001\002\003\004\005\006\007\008\011\012"..
 	"\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031\127"
 
+-- longest legit field is a hash (< 2^32, 5 digits in base 88); since is ~6
+local MAX_FIELD_LEN = 8
+
 local function buildCodec(map)
 	local _base = strlen(map)
 	local digits = {}
@@ -117,6 +120,10 @@ local function buildCodec(map)
 	end
 
 	local function uncrunch(s)
+		-- every field arrives from another player, possibly hand-typed; a long
+		-- enough run of digits overflows to inf, which then gets saved to
+		-- SavedVariables and NaNs every schedule calculation from then on
+		if type(s) ~= "string" or strlen(s) > MAX_FIELD_LEN then return end
 		local num = 0
 		local base = 1
 		local c
@@ -246,9 +253,14 @@ local function ProcessMessage(msg, distribution, sender)
 
 	local args = GetArgs(msg, " ")
 
+	-- anyone can type these, so a missing/garbled field is dropped here rather
+	-- than reaching a handler that assumes it's there
 	if args[1] == CMD_VERSION then -- version, num
-		NauticusClassic:ReceiveMessage_version(tonumber(args[2]), distribution, sender)
+		local clientversion = tonumber(args[2])
+		if not clientversion then return end
+		NauticusClassic:ReceiveMessage_version(clientversion, distribution, sender)
 	elseif args[1] == CMD_KNOWN then -- known, { transports }
+		if type(args[3]) ~= "string" then return end
 		NauticusClassic:ReceiveMessage_known(tonumber(args[2]), args[3], args[4], distribution, sender)
 	end
 end
@@ -309,10 +321,19 @@ C_Timer.NewTicker(WIDE_THROTTLE_RESET_INTERVAL, function()
 	wipe(widePlayerThrottle)
 end)
 
+-- ChatFrame_RemoveChannel only exists via Blizzard_DeprecatedChatInfo on both
+-- clients, which skips loading when the loadDeprecationFallbacks CVar is off;
+-- it's just an alias of the frame method, so call that and keep the global
+-- only as a fallback
 local function hideWideChannelFromChatFrames()
 	for i = 1, 10 do
-		if _G["ChatFrame"..i] then
-			ChatFrame_RemoveChannel(_G["ChatFrame"..i], wideChannelName)
+		local frame = _G["ChatFrame"..i]
+		if frame then
+			if frame.RemoveChannel then
+				frame:RemoveChannel(wideChannelName)
+			elseif ChatFrame_RemoveChannel then
+				ChatFrame_RemoveChannel(frame, wideChannelName)
+			end
 		end
 	end
 end
@@ -346,6 +367,21 @@ local wideJoinPending = false
 -- auto-rejoin and free the slot before we rejoin ourselves further down.
 function NauticusClassic:LeaveWideChannel()
 	LeaveChannelByName(wideChannelName)
+
+	-- older builds fell back to WIDE_CHANNEL_BASE.."b" (then "bb", ...) after a
+	-- slow join; the client keeps auto-rejoining those on login, unfiltered and
+	-- unshuffled, so they could still take /1. Nothing joins them any more.
+	local channels = { GetChannelList() } -- flat id/name/disabled triples
+	local base = strupper(WIDE_CHANNEL_BASE)
+	for i = 2, #channels, 3 do
+		local name = channels[i]
+		if type(name) == "string" and not isSecret(name) then
+			local upper = strupper(name)
+			if strsub(upper, 1, strlen(base)) == base and string.match(strsub(upper, strlen(base) + 1), "^B+$") then
+				LeaveChannelByName(name)
+			end
+		end
+	end
 end
 
 -- Waiting for Blizzard's default channels to "finish loading" before joining (an
@@ -441,12 +477,13 @@ function NauticusClassic:JoinWideChannel()
 		remainingAttempts = remainingAttempts - 1
 		if remainingAttempts < 1 then
 			ticker:Cancel()
-			-- fall back to a differently-named channel in case the base name is unavailable
-			wideChannelName = wideChannelName.."b"
-			self:DebugMessage("wide channel join failed; trying "..wideChannelName)
-			JoinChannelByName(wideChannelName, WIDE_CHANNEL_PW, nil, false)
-			-- give the fallback name its own attempt window before allowing a re-trigger
-			C_Timer.After(4, function() wideJoinPending = false end)
+			-- don't fall back to a differently-named channel (an older build did):
+			-- that cut us off from every peer still on the base name, and left the
+			-- base channel unfiltered if its join landed late. Just let the next
+			-- hardware event (drainWideQueue) retry the same name; this ~20s
+			-- window is the backoff.
+			self:DebugMessage("wide channel join not confirmed after 20s; will retry")
+			wideJoinPending = false
 		end
 	end)
 end
@@ -521,8 +558,11 @@ wideInputFrame:SetPropagateKeyboardInput(true)
 
 local wideChannelWatcher = CreateFrame("Frame")
 wideChannelWatcher:RegisterEvent("CHAT_MSG_CHANNEL")
-wideChannelWatcher:SetScript("OnEvent", function(_, _, text, sender)
-	if isSecret(text) or isSecret(sender) then return end
+wideChannelWatcher:SetScript("OnEvent", function(_, _, text, sender, _, _, _, _, _, _, channelBaseName)
+	if isSecret(text) or isSecret(sender) or isSecret(channelBaseName) then return end
+	-- only our hidden channel: otherwise anyone without the addon could type
+	-- protocol messages into General/Trade and every addon user would act on them
+	if not channelBaseName or strupper(channelBaseName) ~= strupper(wideChannelName) then return end
 	if strsub(text, 1, strlen(WIDE_TAG)) ~= WIDE_TAG then return end -- not ours / different protocol version
 
 	local senderName = strsplit("-", sender) -- strip realm suffix
@@ -541,10 +581,25 @@ SlashCmdList["NAUTWIDE"] = function()
 		#wideQueue > 0 and tostring(GetServerTime() - wideQueue[1][2]).."s" or "n/a"))
 end
 
-function NauticusClassic:ReceiveMessage_version(clientversion, distribution, sender)
-	self:DebugMessage(sender.." says: version "..clientversion)
+-- sender -> the newer-than-ours version they claimed this session
+local newerVersionClaims = {}
 
-	if clientversion <= 0 or clientversion > self.MAX_VERSION_NUM then
+-- highest version at least two distinct senders vouch for (i.e. the second-highest
+-- claim), so one player typing a fake VER can't raise the banner on their own
+local function corroboratedNewerVersion()
+	local best, second = 0, 0
+	for _, v in pairs(newerVersionClaims) do
+		if v > best then
+			best, second = v, best
+		elseif v > second then
+			second = v
+		end
+	end
+	return second
+end
+
+function NauticusClassic:ReceiveMessage_version(clientversion, distribution, sender)
+	if clientversion <= 0 or clientversion > self.MAX_VERSION_NUM or clientversion ~= math.floor(clientversion) then
 		-- clientversion packs "MAJOR.MINOR.PATCH" assuming each segment is a single digit
 		-- (see NautCore.lua); a build with a segment >= 10 produces a bogus huge number that
 		-- would otherwise look like a permanent "major update" to everyone who hears it
@@ -552,12 +607,22 @@ function NauticusClassic:ReceiveMessage_version(clientversion, distribution, sen
 		return
 	end
 
+	self:DebugMessage(sender.." says: version "..clientversion)
+
 	if clientversion > self.versionNum then
-		if not self.db.global.newerVersion then
-			self.db.global.newerVersion = clientversion
-			self.db.global.newerVerAge = time()
-		elseif clientversion > self.db.global.newerVersion then
-			self.db.global.newerVersion = clientversion
+		-- at most one major version ahead; anything further is far more likely
+		-- forged than real
+		if clientversion <= self.versionNum + self.MAX_VERSION_AHEAD then
+			newerVersionClaims[sender] = clientversion
+			local vouched = corroboratedNewerVersion()
+			if vouched > self.versionNum then
+				if not self.db.global.newerVersion or vouched > self.db.global.newerVersion then
+					self.db.global.newerVersion = vouched
+				end
+				-- refreshed on every corroborated sighting; InitialiseConfig expires
+				-- the banner once nobody has reported it for a while
+				self.db.global.newerVerAge = time()
+			end
 		end
 	elseif clientversion < self.versionNum then
 		requestVersions[distribution] = true
@@ -695,32 +760,43 @@ function NauticusClassic:IsBetter(transit, since, boots, swaps)
 	end
 end
 
+-- sanity caps on values another player hands us; legit ones sit far below
+local MAX_SINCE_MS = 3.2e10 -- ~1 year of age
+local MAX_BOOTS_SWAPS = 10000
+
 function NauticusClassic:StringToKnown(transports, safe)
 	local dec = safe and uncrunchSafe or uncrunch
 	local args_tmp, transit, since, swaps, boots
-	local args = GetArgs(transports, ",")
+	-- not GetArgs: it nils out empty entries, and "#" over a table with holes
+	-- (e.g. "a,,b") is undefined, so a garbled list could skip or misread entries
+	local args = { strsplit(",", transports) }
 	local trans_tab = {}
 
 	for t = 1, #(args), 1 do
-		args_tmp = GetArgs(args[t], ":")
-		transit = dec(args_tmp[1])
+		if args[t] ~= "" then
+			args_tmp = GetArgs(args[t], ":")
+			transit = dec(args_tmp[1])
 
-		if transit and self.transports[transit] then
-			since = args_tmp[2]
-			if since then
-				since, swaps, boots = dec(since), args_tmp[3], args_tmp[4]
+			if transit and self.transports[transit] then
+				since = args_tmp[2]
 				if since then
-					trans_tab[transit] = {
-						['since'] = since,
-						['boots'] = boots and dec(boots) or 0,
-						['swaps'] = swaps and dec(swaps) or 1,
-					}
+					since, swaps, boots = dec(since), args_tmp[3], args_tmp[4]
+					swaps = (swaps == nil) and 1 or dec(swaps)
+					boots = (boots == nil) and 0 or dec(boots)
+					if since and swaps and boots and since <= MAX_SINCE_MS and
+						swaps <= MAX_BOOTS_SWAPS and boots <= MAX_BOOTS_SWAPS then
+						trans_tab[transit] = {
+							['since'] = since,
+							['boots'] = boots,
+							['swaps'] = swaps,
+						}
+					end
+				else
+					trans_tab[transit] = {}
 				end
-			else
-				trans_tab[transit] = {}
+			elseif transit then
+				self:DebugMessage("unknown transit: "..transit)
 			end
-		elseif transit then
-			self:DebugMessage("unknown transit: "..transit)
 		end
 	end
 

@@ -9,7 +9,7 @@ local GREY    = "|cffbababa"
 -- constants
 local NONE = -1
 local ARTWORK_PATH = "Interface\\AddOns\\NauticusClassicResurrected\\Artwork\\"
-local ARTWORK_LOGO = ARTWORK_PATH.."NauticusClassicLogo"
+local ARTWORK_LOGO = ARTWORK_PATH.."NauticusLogo"
 local ARTWORK_ALARM = "Interface\\Icons\\INV_Misc_PocketWatch_02"
 local NUMBER_FONT = "Fonts\\ARIALN.TTF"
 
@@ -415,7 +415,10 @@ function dataobj:OnClick(button)
 					end
 					table.insert(platformStrings, format("%s (%s: %s)", data.name, depOrArr, NauticusClassic:GetFormattedTime(plat_time)))
 				end
-				SendChatMessage(table.concat(platformStrings, " <-> "), channel);
+				-- the SendChatMessage global is only a deprecation shim (skipped when the
+				-- loadDeprecationFallbacks CVar is off) that forwards to this anyway
+				local send = C_ChatInfo and C_ChatInfo.SendChatMessage or SendChatMessage
+				send(table.concat(platformStrings, " <-> "), channel);
 			end
 		else
 			NauticusClassic:HideTooltip()

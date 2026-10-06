@@ -420,8 +420,8 @@ NauticusClassic.rtts_forever = {
 }
 
 -- Keys here MUST match which plat-tag number was actually used at each dock
--- during recording (packedData_forever[5]: plat1=Menethil[5], plat2=
--- Southshore[189], plat3=Auberdine[293]), not the physical/travel order or
+-- during recording (packedData_forever[5]: plat1=Menethil[1], plat2=
+-- Southshore[180], plat3=Auberdine[281]), not the physical/travel order or
 -- the old 2-stop table's numbering -- the decode loop sets
 -- self.platforms[id][N].index purely off the "platN" tag's own N, so a
 -- mismatch here silently swaps which real dock's timing data shows up under

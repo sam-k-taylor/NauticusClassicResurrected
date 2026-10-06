@@ -16,6 +16,7 @@
 ## LoadOnDemand: 0
 ## SavedVariables: NauticusClassic5DB
 ## X-Category: Maps
+## IconTexture: Interface\AddOns\NauticusClassicResurrected\Artwork\AddonIcon
 
 #@no-lib-strip@
 Libs\LibStub\LibStub.lua

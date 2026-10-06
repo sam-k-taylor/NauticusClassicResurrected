@@ -21,9 +21,10 @@ local ARTWORK_DOCKED = ARTWORK_PATH.."Docked"
 -- self.rtts_forever, see data.lua) or GetFormattedTime silently returns nil
 -- for any Arrival prediction past the cap, rendering as a blank tooltip
 -- line -- confirmed happening for [5]/Auberdine once rtts_forever[5]
--- (484.007, Forever's new 3-stop route) exceeded the old 297 cap sized off
--- the previous longest route (356.288 - 60).
-local MAX_FORMATTED_TIME = 485
+-- (Forever's new 3-stop route, now 486.226) exceeded the old 297 cap sized
+-- off the previous longest route (356.288 - 60). Left with headroom so the
+-- next re-recorded route doesn't silently outgrow it again.
+local MAX_FORMATTED_TIME = 600
 local ICON_DEFAULT_SIZE = 18
 local MINI_ICON_SIZE_FOREVER_PRESETS = { small = 1, medium = 1.5, large = 2 } -- see iconminisizeforever below
 local ARRIVAL_SOUND_DISTANCE = 20.0 -- game yards; matches the platform-proximity threshold used elsewhere
@@ -110,7 +111,13 @@ local IS_FOREVER = select(4, GetBuildInfo()) >= FOREVER_INTERFACE
 -- instance too. Lua method calls (self:Method(...)) resolve the function on
 -- the table at each call, so this reaches HBD's own internal self-calls too,
 -- not just external ones.
-if IS_FOREVER then
+--
+-- Applied again from OnEnable: an addon loading after us that embeds a newer
+-- HereBeDragons-2.0 minor redefines these methods on the same shared table,
+-- silently undoing the patch made at our file load.
+local function PatchHBDForForever()
+	if not IS_FOREVER then return end
+
 	function HBD:GetAzerothWorldMapCoordinatesFromWorld(x, y, instance, allowOutOfBounds)
 		local ax, ay = ClassicAzerothMapFromWorld(x, y, instance)
 		if not ax then return nil, nil; end
@@ -124,6 +131,7 @@ if IS_FOREVER then
 		return wx, wy, instance
 	end
 end
+PatchHBDForForever()
 
 -- read our own version from the .toc so it can never drift out of sync with
 -- what's actually shipped; versionNum packs "MAJOR.MINOR.PATCH" into digits
@@ -134,9 +142,22 @@ local GetAddOnMetadata = C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetad
 -- object variables
 NauticusClassic.DEFAULT_PREFIX = "NauticSync" -- do not change!
 NauticusClassic.version = GetAddOnMetadata("NauticusClassicResurrected", "Version")
-local versionDigits = (NauticusClassic.version):gsub("%.", "") -- discard gsub's 2nd return (match count)
-NauticusClassic.versionNum = tonumber(versionDigits)
+do
+	-- strict X.Y.Z: stripping dots instead would pack "1.6" to 16 (older than
+	-- 1.5.3's 153) and "1.5.3-beta" to nil, which errors in every version compare
+	local major, minor, patch = string.match(NauticusClassic.version or "", "^(%d)%.(%d)%.(%d)$")
+	if major then
+		NauticusClassic.versionNum = tonumber(major) * 100 + tonumber(minor) * 10 + tonumber(patch)
+	else
+		-- 0 is rejected as implausible by every receiver, so an unparseable
+		-- (e.g. -beta) build just sits out the version exchange
+		NauticusClassic.versionNum = 0
+		print("|cffff0000NauticusClassic|r: .toc Version \""..tostring(NauticusClassic.version).."\" isn't X.Y.Z with single-digit segments; version checks disabled")
+	end
+end
 NauticusClassic.MAX_VERSION_NUM = 999 -- highest value 3 single-digit segments (9.9.9) can pack to; see comment above
+NauticusClassic.MAX_VERSION_AHEAD = 100 -- one major version; a peer claiming more is ignored (see ReceiveMessage_version)
+local NEWER_VERSION_EXPIRY = 14 * 24 * 60 * 60 -- seconds without a corroborated sighting before the banner drops
 NauticusClassic.lowestNameTime = "--"
 NauticusClassic.tempText = ""
 NauticusClassic.tempTextCount = 0
@@ -206,6 +227,38 @@ local function PointWorldCoords(transit, index, instanceID)
 	end
 end
 
+-- HBD-Pins has no "move pin" call: re-adding a world map icon enumerates every
+-- addon's HBD pins to remove the old one, and re-adding a minimap icon forces a
+-- full recompute of all of them. So only re-register when the position actually
+-- changed (it doesn't for the whole time a transport is docked). The cached
+-- position must be cleared whenever the pin is removed, or the next draw would
+-- skip re-adding it -- hence going through these rather than Pins directly.
+local function SetWorldMapIcon(button, instance, x, y)
+	if button.pinInstance == instance and button.pinX == x and button.pinY == y then return end
+	Pins:RemoveWorldMapIcon(NauticusClassic, button)
+	Pins:AddWorldMapIconWorld(NauticusClassic, button, instance, x, y, HBD_PINS_WORLDMAP_SHOW_WORLD)
+	button.pinInstance, button.pinX, button.pinY = instance, x, y
+end
+
+local function ClearWorldMapIcon(button)
+	Pins:RemoveWorldMapIcon(NauticusClassic, button)
+	button.pinInstance, button.pinX, button.pinY = nil, nil, nil
+	button:Hide()
+end
+
+local function SetMinimapIcon(button, instance, x, y)
+	if button.pinInstance == instance and button.pinX == x and button.pinY == y then return end
+	-- unlike the world map, re-adding an existing minimap icon updates it in place
+	Pins:AddMinimapIconWorld(NauticusClassic, button, instance, x, y, true)
+	button.pinInstance, button.pinX, button.pinY = instance, x, y
+end
+
+local function ClearMinimapIcon(button)
+	Pins:RemoveMinimapIcon(NauticusClassic, button)
+	button.pinInstance, button.pinX, button.pinY = nil, nil, nil
+	button:Hide()
+end
+
 local defaults = {
 	profile = {
 		factionSpecific = true,
@@ -246,8 +299,7 @@ local _options = {
 			NauticusClassic.db.profile.showMiniIcons = val
 			if not val then
 				for _, t in pairs(transports) do
-					Pins:RemoveMinimapIcon(NauticusClassic, t.minimap_icon)
-					t.minimap_icon:Hide()
+					ClearMinimapIcon(t.minimap_icon)
 				end
 			else
 				NauticusClassic:DrawMapIcons(false, true)
@@ -266,8 +318,7 @@ local _options = {
 			NauticusClassic.db.profile.showWorldIcons = val
 			if not val then
 				for _, t in pairs(transports) do
-					Pins:RemoveWorldMapIcon(NauticusClassic, t.worldmap_icon)
-					t.worldmap_icon:Hide()
+					ClearWorldMapIcon(t.worldmap_icon)
 				end
 			else
 				NauticusClassic:DrawMapIcons(true, false)
@@ -334,7 +385,7 @@ local _options = {
 			val = val * ICON_DEFAULT_SIZE
 			for _, t in pairs(transports) do
 				t.worldmap_icon:SetSize(val, val)
-				t.worldmap_icon.texture:SetHeight(val * math.sqrt(2), val * math.sqrt(2))
+				t.worldmap_icon.texture:SetSize(val * math.sqrt(2), val * math.sqrt(2))
 			end
 		end,
 		isPercent = true,
@@ -525,7 +576,7 @@ local function GetCurrentMapOrInstanceID()
 		return nil
 	end
 	if id == nil or id == 0 then
-		_, _, _, _, _, _, _, id = GetInstanceInfo()
+		id = select(8, GetInstanceInfo())
 	end
 	return id
 end
@@ -538,7 +589,9 @@ end
 -- timings are still fresh on the way back out. Checked live rather than cached so it can't go stale
 -- across a loading screen. Deliberately only "party"/"raid" rather than
 -- IsInInstance(), so anything else instanced (e.g. the Deeprun Tram, which
--- this addon does track) isn't caught up in it.
+-- this addon does track) isn't caught up in it. Unlike most Forever-motivated
+-- changes this one deliberately applies on Era too: there's nothing to track
+-- in a dungeon on either client, so it's just skipped work there.
 function NauticusClassic:InDungeon()
 	local _, instanceType = GetInstanceInfo()
 	return instanceType == "party" or instanceType == "raid"
@@ -553,6 +606,7 @@ function NauticusClassic:GetBroadcastChannel()
 end
 
 function NauticusClassic:OnEnable()
+	PatchHBDForForever() -- see its comment: every addon's files have loaded by now
 	self:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 	self:RegisterEvent("ZONE_CHANGED")
 	self:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -640,6 +694,9 @@ function NauticusClassic:DrawMapIcons_Unsafe(renderWorldMapIcons, renderMinimapI
 
 	local WorldMapVisible = WorldMapFrame:IsVisible()
 	local px, py, instanceID = HBD:GetPlayerWorldPosition()
+	-- loop-invariant; this runs at the icon framerate (30/s by default)
+	local playerFaction = UnitFactionGroup("player")
+	local minimapFacing = (GetCVar("rotateMinimap") == "1") and GetPlayerFacing() or 0
 
 	for id, transport in pairs(transports) do
 		if self:HasKnownCycle(id) then
@@ -664,7 +721,7 @@ function NauticusClassic:DrawMapIcons_Unsafe(renderWorldMapIcons, renderMinimapI
 
 			if self.db.profile.showMiniIcons or self.db.profile.showWorldIcons then
 				isZoneInteresting = (self.currentZoneTransports) and self.currentZoneTransports[id]
-				isFactionInteresting = (not self.db.profile.factionSpecific) or transport.faction == UnitFactionGroup("player") or transport.faction == "Neutral"
+				isFactionInteresting = (not self.db.profile.factionSpecific) or transport.faction == playerFaction or transport.faction == "Neutral"
 				buttonMini, buttonWorld = transport.minimap_icon, transport.worldmap_icon
 
 				-- while interpolating through a ":jump"-tagged index (a
@@ -700,7 +757,14 @@ function NauticusClassic:DrawMapIcons_Unsafe(renderWorldMapIcons, renderMinimapI
 						-- minimap-only, same as the Tram.
 						xw, yw = x, y
 						wzone = NauticusClassic.rawInstance[id]
-						xm, ym = x, y
+						-- same continent check as the composite branch below: these
+						-- coordinates mean nothing in any other instance, so drawing
+						-- them on (say) Kalimdor's minimap points somewhere arbitrary
+						if wzone == instanceID then
+							xm, ym = x, y
+						else
+							xm, ym = nil, nil
+						end
 					elseif self.coordsType[id] < 0 then
 						local wcont
 						if x < 0.5 then
@@ -738,8 +802,7 @@ function NauticusClassic:DrawMapIcons_Unsafe(renderWorldMapIcons, renderMinimapI
 									buttonWorld.texture:SetTexture(isZoning and ARTWORK_ZONING or transport.texture_name)
 									transport.status = isZoning
 								end
-								Pins:RemoveWorldMapIcon(self, buttonWorld)
-								Pins:AddWorldMapIconWorld(self, buttonWorld, wzone, xw, yw, HBD_PINS_WORLDMAP_SHOW_WORLD)
+								SetWorldMapIcon(buttonWorld, wzone, xw, yw)
 								buttonWorld.texture:SetRotation(angle)
 								-- stashed for /nautrotcheck -- a live comparison against the
 								-- player's own GetPlayerFacing() while standing still on the
@@ -751,31 +814,26 @@ function NauticusClassic:DrawMapIcons_Unsafe(renderWorldMapIcons, renderMinimapI
 								buttonWorld:Show()
 							end
 						elseif buttonWorld:IsVisible() then
-							Pins:RemoveWorldMapIcon(self, buttonWorld)
-							buttonWorld:Hide()
+							ClearWorldMapIcon(buttonWorld)
 						end
 
 						if xm and ym and isZoneInteresting and self.db.profile.showMiniIcons and isFactionInteresting then
 							if renderMinimapIcons then
-								Pins:RemoveMinimapIcon(self, buttonMini)
-								Pins:AddMinimapIconWorld(self, buttonMini, instanceID, xm, ym, true)
-								buttonMini.texture:SetRotation(angle - (GetCVar("rotateMinimap") == "1" and GetPlayerFacing() or 0))
+								SetMinimapIcon(buttonMini, instanceID, xm, ym)
+								buttonMini.texture:SetRotation(angle - minimapFacing)
 								buttonMini:SetAlpha(Pins:IsMinimapIconOnEdge(buttonMini) and 0.6 or 0.9)
 								buttonMini:Show()
 							end
 						elseif buttonMini:IsVisible() then
-							Pins:RemoveMinimapIcon(self, buttonMini)
-							buttonMini:Hide()
+							ClearMinimapIcon(buttonMini)
 						end
 					end
 				else
 					if buttonMini:IsVisible() then
-						Pins:RemoveMinimapIcon(self, buttonMini)
-						buttonMini:Hide()
+						ClearMinimapIcon(buttonMini)
 					end
 					if buttonWorld:IsVisible() then
-						Pins:RemoveWorldMapIcon(self, buttonWorld)
-						buttonWorld:Hide()
+						ClearWorldMapIcon(buttonWorld)
 					end
 				end
 			end
@@ -882,7 +940,10 @@ function NauticusClassic:CheckTriggers_OnUpdate_Unsafe()
 
 	-- remember if we've already triggered a set of coords within the last 30 secs
 	if last_trig and GetTime() > 30.0 + last_trig then last_trig = nil; end
-	if not self.currentZoneTransports or self.currentZoneTransports.virtual then return; end
+	-- forget the last position when we stop sampling, or the first tick back in
+	-- a transit zone measures dist against wherever we were minutes ago, which
+	-- trivially passes the "moving with the transport" check below
+	if not self.currentZoneTransports or self.currentZoneTransports.virtual then x, y = nil, nil; return; end
 
 	old_x, old_y = x, y
 	old_ax, old_ay = ax, ay
@@ -1015,7 +1076,7 @@ end
 
 -- see Clock_OnUpdate: guards against one bad tick permanently killing this repeating timer
 function NauticusClassic:CheckTriggers_OnUpdate()
-	if self:InDungeon() then return; end
+	if self:InDungeon() then x, y = nil, nil; return; end -- see CheckTriggers_OnUpdate_Unsafe
 	local ok, err = pcall(self.CheckTriggers_OnUpdate_Unsafe, self)
 	if not ok then
 		self:DebugMessage("CheckTriggers_OnUpdate error: "..tostring(err))
@@ -1049,14 +1110,18 @@ function NauticusClassic:CheckArrivals_OnUpdate_Unsafe()
 				end
 			end
 
-			if dockedIndex and dockedIndex ~= dockedAtPlatform[transit] then
+			-- nil = not observed yet since login/zoning in: just record the state,
+			-- or a boat that was already sitting at the dock dings as if it had
+			-- just arrived. false = observed, not docked.
+			local prevDocked = dockedAtPlatform[transit]
+			if prevDocked ~= nil and dockedIndex and dockedIndex ~= prevDocked then
 				local tx, ty = PointWorldCoords(transit, dockedIndex, instanceID)
 				local pdist = tx and ty and HBD:GetWorldDistance(instanceID, px, py, tx, ty)
 				if pdist and ARRIVAL_SOUND_DISTANCE > pdist then
 					PlaySound(5495) -- BoatDockingWarning
 				end
 			end
-			dockedAtPlatform[transit] = dockedIndex
+			dockedAtPlatform[transit] = dockedIndex or false
 		end
 	end
 end
@@ -1233,17 +1298,21 @@ function NauticusClassic:InitialiseConfig()
 
 	if self.db.global.newerVersion then
 		--self:DebugMessage("new version: "..self.db.global.newerVersion.." vs our "..self.versionNum)
-		if self.db.global.newerVersion <= 0 or self.db.global.newerVersion > self.MAX_VERSION_NUM then
-			-- a peer once broadcast an implausible version (e.g. a two-digit segment like
-			-- a "1.4.10"-style build, which breaks the single-digit packing) before the
-			-- ReceiveMessage_version guard existed to reject it outright; self-heal here
-			-- so an already-poisoned SavedVariables value doesn't show "update available" forever
+		if self.db.global.newerVersion <= 0 or self.db.global.newerVersion > self.MAX_VERSION_NUM
+			or self.db.global.newerVersion > self.versionNum + self.MAX_VERSION_AHEAD
+			or not self.db.global.newerVerAge or time() - self.db.global.newerVerAge > NEWER_VERSION_EXPIRY then
+			-- implausible (e.g. a "1.4.10"-style two-digit segment, or a forged
+			-- "VER 999" saved before ReceiveMessage_version checked for one) or
+			-- not reported by anyone recently; self-heal so an already-poisoned
+			-- SavedVariables value doesn't show "update available" forever
 			self.db.global.newerVersion = nil
 			self.db.global.newerVerAge = nil
 		elseif self.db.global.newerVersion > self.versionNum then
-			-- major update released
+			-- major update released. This used to set comm_disable too, but the
+			-- version is only hearsay from other players, so a single forged
+			-- message could switch everyone's sync off; wire incompatibility is
+			-- already handled by DATA_VERSION/WIDE_TAG instead
 			if math.floor(self.db.global.newerVersion/10) > math.floor(self.versionNum/10) then
-				self.comm_disable = true
 				self.update_available = true
 			else
 				self.update_available = 30
@@ -1416,6 +1485,7 @@ function NauticusClassic:PLAYER_ENTERING_WORLD()
 	if self.currentZoneId then
 		self.currentZoneTransports = self.transitZones[self.currentZoneId]
 	end
+	wipe(dockedAtPlatform) -- bypasses SetZone, so re-seed here too
 end
 
 local updateZoneTimer
@@ -1445,6 +1515,7 @@ function NauticusClassic:SetZone(zoneId)
 
 	self.currentZoneId = zoneId
 	self.currentZoneTransports = self.transitZones[zoneId]
+	wipe(dockedAtPlatform) -- re-seed on arrival; see CheckArrivals_OnUpdate_Unsafe
 	-- diagnostic for the [11] (Stormwind Harbor<->Darkshore) registration
 	-- issue: confirms/rules out whether GetCurrentMapOrInstanceID ever
 	-- reports something other than 1453/1439 while out on open water,
